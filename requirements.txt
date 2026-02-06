@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-multipart
+sqlalchemy
+psycopg2-binary
+passlib[bcrypt]
+python-jose[cryptography]
+tensorflow
+tf_keras
+tensorflow_hub
+pillow
+nibabel
+numpy
+matplotlib
+python-dotenv
