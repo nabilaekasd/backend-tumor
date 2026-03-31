@@ -3,9 +3,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # KONFIGURASI POSTGRESQL
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:passwordnabilaesd@localhost/tumordb"
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:passwordnabilaesd@localhost:5433/tumordb"
 
-# Membuat mesin database (Postgres tidak butuh check_same_thread seperti SQLite)
+# Membuat mesin database
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL
 )

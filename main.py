@@ -25,6 +25,15 @@ import numpy as np
 from PIL import Image
 import pydantic
 
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"GPU Memory Growth Activated: {len(gpus)} GPUS(s)")
+    except RuntimeError as e:
+        print(f"GPU Error: {e}")
+
 # Create Database Table
 models.Base.metadata.create_all(bind=engine)
 
@@ -490,6 +499,23 @@ async def get_image_manual(filename: str):
     
     print(f"File tidak ditemukan: {file_path}")
     return {"error": "File tidak ditemukan"}
+
+# ENDPOINT UPDATE CATATAN DOKTER
+@app.put("/analisis/{analysis_id}/update-notes/")
+async def update_doctor_notes(analysis_id: int, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+
+    scan = db.query(models.MRIScan).filter(models.MRIScan.id == analysis_id).first()
+
+    if not scan:
+        raise HTTPException(status_code=404, detail="Data MRI tidak ditemukan")
+    
+    new_notes = data.get("notes_dokter", "")
+    scan.catatan_dokter = new_notes
+
+    db.commit()
+    db.refresh(scan)
+    save_log(db, current_user.username, current_user.role, "Update Notes", f"Update catatan dokter untuk Scan ID: {analysis_id}")
+    return {"status": "sukses", "message": "Catatan berhasil diperbarui", "data": new_notes}
 
 # ENDPOINT DASHBOARD SUMMARY
 @app.get("/dashboard-summary/", response_model=schemas.DashboardSummary)

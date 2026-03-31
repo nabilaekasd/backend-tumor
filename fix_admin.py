@@ -2,8 +2,7 @@ from database import SessionLocal
 from models import User
 import auth
 
-# GANTI INI DENGAN USERNAME ANDA YANG BERMASALAH
-USERNAME_TARGET = "admin"  # <--- Masukkan username anda di sini
+USERNAME_TARGET = "admin"
 
 def restore_admin():
     db = SessionLocal()
