@@ -10,11 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 from datetime import datetime
+from sqlalchemy import func
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] ='0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
 import tensorflow as tf
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
 import tensorflow_hub as hub
 import auth
 import models, schemas
@@ -387,31 +389,29 @@ async def upload_mri_smart(
 
     if model_ai:
         try:
-            # Buka gambar dari memory & convert ke RGB
-            img = Image.open(io.BytesIO(contents)).convert('RGB')
+            # Load image & resize
+            img = load_img(file_path, target_size=(299, 299))
 
-            # Resize ke 299 x 299
-            img = img.resize((299, 299))
+            # Scaling
+            x = img_to_array(img) / 255.0
 
-            # Ubah ke array & normalisasi
-            img_array = np.array(img)
-            img_array = img_array / 255.0
-            img_array = np.expand_dims(img_array, axis=0)
+            # Expand dims
+            x = np.expand_dims(x, axis=0)
 
-            prediction = model_ai.predict(img_array)
-            score = float(prediction[0][0])
+            # Predict
+            prediction = model_ai.predict(x)
+            print(f"Debug AI Raw Prediction: {prediction}")
 
-            print(f"Debug AI Score: {score}")
+            predicted_index = int(np.argmax(prediction[0]))
+            score = float(prediction[0][predicted_index])
+            print(f"Debug AI Index: {predicted_index} | Score: {score}")
 
-            # Jika Mendekati 1 = Cancer, mendekati 0 = Non-Cancer
-            if score > 0.5:
+            if predicted_index == 0:
                 hasil_prediksi = "Cancer"
-                confidence_score = int(score * 100)
-
             else:
                 hasil_prediksi = "Non-Cancer"
-                confidence_score = int((1 - score) * 100)
-        
+            confidence_score = int(score * 100)
+            
         except Exception as e:
             print(f"Error AI: {e}")
             hasil_prediksi = "Error Analisis AI"
@@ -430,6 +430,18 @@ async def upload_mri_smart(
     )
     db.add(new_scan)
     db.commit()
+    db.refresh(new_scan)
+
+    new_notif = models.Notification(
+        target_role="Dokter",
+        title="Analisis AI Selesai",
+        message=f"Analisis MRI untuk pasien {nama} telah selesai dianalisis.",
+        analysis_id=new_scan.id
+    )
+    db.add(new_notif)
+    db.commit()
+
+    print(f"Notifikasi disimpan: Untuk dokter, pasien: {nama} | ID scan: {new_scan.id}")
 
     save_log(db, current_user.username, current_user.role, "Upload MRI", f"Upload scan untuk pasien: {nama} ({hasil_prediksi})")
 
@@ -514,6 +526,18 @@ async def update_doctor_notes(analysis_id: int, data: dict, db: Session = Depend
 
     db.commit()
     db.refresh(scan)
+
+    nama_pasien = scan.patient.nama if scan.patient else "Tanpa Nama"
+    new_notif = models.Notification(
+        target_role="Radiolog",
+        title="Catatan Dokter",
+        message=f"Dokter telah menambahkan catatan untuk pasien {nama_pasien}.",
+        analysis_id=scan.id
+    )
+
+    db.add(new_notif)
+    db.commit()
+
     save_log(db, current_user.username, current_user.role, "Update Notes", f"Update catatan dokter untuk Scan ID: {analysis_id}")
     return {"status": "sukses", "message": "Catatan berhasil diperbarui", "data": new_notes}
 
@@ -529,3 +553,30 @@ def get_summary(db: Session = Depends(get_db)):
         "total_menunggu": menunggu,
         "total_selesai": selesai
     }
+
+# ENDPOINT NOTIFIKASI
+@app.get("/notifications/")
+def get_notifications(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    notifs = db.query(models.Notification).filter(func.lower(models.Notification.target_role) == func.lower(current_user.role)).order_by(models.Notification.created_at.desc()).all()
+
+    print(f"Jumlah notifikasi ditemukan: {len(notifs)}")
+
+    results = []
+    for n in notifs:
+        results.append({
+            "id": n.id,
+            "title": n.title,
+            "message": n.message,
+            "analysis_id": n.analysis_id,
+            "is_read": n.is_read,
+            "created_at": n.created_at.strftime("%d/%m/%Y • %H:%M WIB")
+        })
+    return results
+
+@app.put("/notifications/{notif_id}/read")
+def mark_notification_read(notif_id: int, db: Session = Depends(get_db)):
+    notif = db.query(models.Notification).filter(models.Notification.id == notif_id).first()
+    if notif:
+        notif.is_read = True
+        db.commit()
+    return {"status": "sukses"}

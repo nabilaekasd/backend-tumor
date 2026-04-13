@@ -60,3 +60,15 @@ class MRIScan(Base):
     confidence = Column(Integer, default=0)
     
     patient = relationship("Patient", back_populates="scans")
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    target_role = Column(String) 
+    title = Column(String)
+    message = Column(String)
+
+    analysis_id = Column(Integer, ForeignKey("mri_scans.id"), nullable=True)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
