@@ -2,7 +2,7 @@
 from fastapi.security import OAuth2AuthorizationCodeBearer, OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, FileResponse
 from jose import JWTError, jwt
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 from typing import List
@@ -12,29 +12,39 @@ from database import SessionLocal, engine
 from datetime import datetime
 from sqlalchemy import func
 import os
-os.environ['TF_ENABLE_ONEDNN_OPTS'] ='0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
-import tensorflow as tf
-from tensorflow.keras.preprocessing.image import load_img, img_to_array
-import tensorflow_hub as hub
+import zipfile
 import auth
 import models, schemas
 import shutil
 import uuid
 import io
-import numpy as np
 from PIL import Image
 import pydantic
+import subprocess
+import nibabel as nib
+import numpy as np
+import json
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import plotly.graph_objects as go
+from skimage import measure
+from scipy.ndimage import gaussian_filter
+import torch
+torch.serialization.add_safe_globals([np._core.multiarray.scalar])
 
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        print(f"GPU Memory Growth Activated: {len(gpus)} GPUS(s)")
-    except RuntimeError as e:
-        print(f"GPU Error: {e}")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MEDNEXT_DIR = os.path.join(BASE_DIR, "backend_mednext")
+
+os.environ["nnUNet_raw_data_base"] = os.path.join(MEDNEXT_DIR, "nnUNet_raw")
+os.environ["nnUNet_preprocessed"] = os.path.join(MEDNEXT_DIR, "nnUNet_preprocessed")
+os.environ["RESULTS_FOLDER"] = os.path.join(MEDNEXT_DIR, "nnUNet_results")
+os.environ["TORCH_LOAD_WEIGHTS_ONLY"] = "0"
+
+INPUT_DIR = os.path.join(os.environ["nnUNet_raw_data_base"], "temp_input")
+OUTPUT_DIR = os.path.join(os.environ["RESULTS_FOLDER"], "temp_output")
+
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Create Database Table
 models.Base.metadata.create_all(bind=engine)
@@ -55,31 +65,6 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
-
-# Load Model AI
-print("Sedang memuat model AI")
-model_ai = None
-try:
-    MODEL_PATH = "ai_models/Breast_Cancer.h5"
-
-    if os.path.exists(MODEL_PATH):
-
-        file_size = os.path.getsize(MODEL_PATH) / (1024 * 1024)
-        print(f"Ukuran: {file_size:.2f} MB")
-
-        model_ai = tf.keras.models.load_model(
-            MODEL_PATH, 
-            custom_objects={
-                'KerasLayer': hub.KerasLayer
-            },
-            compile=False,
-            safe_mode=False
-        )
-        print("Model AI Berhasil Dimuat!")
-    else:
-        print(f"File model tidak ditemukan di: {MODEL_PATH}")
-except Exception as e:
-    print(f"Gagal Memuat Model: {e}")
 
 # Dependency Database
 def get_db():
@@ -169,29 +154,28 @@ def create_new_user(user: schemas.UserCreate, db: Session = Depends(get_db), cur
 
 # Edit User
 @app.put("/users/{user_id}", response_model=schemas.UserResponse)
-def update_user(user_id: int, user_update: schemas.UserCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
 
     print(f"Data Mentah dari Flutter: {user_update.dict()}")
 
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
-    
-    db_user.username = user_update.username
-    db_user.full_name = user_update.full_name
-    db_user.role = user_update.role
 
+    if user_update.username is not None:
+        db_user.username = user_update.username
+    
+    if user_update.full_name is not None:
+        db_user.full_name = user_update.full_name
+
+    if user_update.role is not None:
+        db_user.role = user_update.role
+    
     if user_update.password and user_update.password.strip():
         db_user.hashed_password = auth.get_password_hash(user_update.password)
-    
-    print(f"Avatar Lama di DB: {db_user.avatar}")
-    print(f"Avatar Baru dari Flutter: {user_update.avatar}")
 
     if user_update.avatar is not None:
         db_user.avatar = user_update.avatar
-        print("STATUS: Avatar Berhasil diupdate")
-    else:
-        print("STATUS: Avatar dari Flutter kosong(None).")
     
     db.commit()
     db.refresh(db_user)
@@ -335,9 +319,207 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     save_log(db, current_user.username, current_user.role, "Update Profile", "Mengganti foto profil")
     return {"message": "Foto profil berhasil diupdate", "url": avatar_url} 
 
+# LOGIC 2D & 3D
+def generate_visualizations_logic(mri_path_2d, mri_path_3d, pred_path, out_2d, out_3d, case_id):
+    print(f"Mulai merender visualisasi untuk {case_id}")
+
+    #Load Data 2D
+    mri_2d = nib.load(mri_path_2d).get_fdata().astype(np.float32)
+    pred_2d = nib.load(pred_path).get_fdata().astype(np.uint8)
+
+    # Load Data 3D
+    mri_3d = nib.as_closest_canonical(nib.load(mri_path_3d)).get_fdata().astype(np.float32)
+    pred_3d = nib.as_closest_canonical(nib.load(pred_path)).get_fdata().astype(np.uint8)
+
+    # Render 2D
+    def norm01(x):
+        v = x[np.isfinite(x)]
+        lo, hi = np.percentile(v, [2, 98]) if v.size > 0 else (0.0, 1.0)
+        if hi <= lo: hi = lo + 1e-8
+        return np.clip((x - lo) / (hi - lo + 1e-8), 0, 1)
+
+    def best_slice(mask, axis):
+        counts = np.sum(mask > 0, axis=tuple(i for i in range(3) if i != axis))
+        return int(np.argmax(counts)) if counts.max() > 0 else mask.shape[axis] // 2
+
+    def take_slice(vol, axis, idx):
+        if axis == 0: return vol[idx, :, :] # sagittal
+        if axis == 1: return vol[:, idx, :] # coronal
+        if axis == 2: return vol[:, :, idx] # transversal
+
+    views = {"Sagittal": 0, "Coronal": 1, "Transversal": 2}
+    colors_hex = {
+        1: "#e41a1c", # NETC
+        2: "#377eb8", # SNFH
+        3: "#4daf4a", # ET
+        4: "#984ea3", # RC
+    }
+    mask_cmap = ListedColormap(["none"] + [colors_hex[1], colors_hex[2], colors_hex[3], colors_hex[4]])
+
+    fig_2d, axs = plt.subplots(1, 3, figsize=(13, 4), dpi=150)
+
+    for i, (name, axis) in enumerate(views.items()):
+        idx = best_slice(pred_2d, axis)
+        mri_s = norm01(take_slice(mri_2d, axis, idx))
+        pred_s = take_slice(pred_2d, axis, idx)
+
+        axs[i].imshow(mri_s, cmap="gray", interpolation="nearest")
+        axs[i].imshow(pred_s, cmap=mask_cmap, alpha=0.65, vmin=0, vmax=4, interpolation="nearest")
+        axs[i].set_title(f"Prediction {name}")
+        axs[i].axis("off")
+
+    plt.tight_layout(pad=0.6, w_pad=0.2, h_pad=0.4)
+    plt.savefig(out_2d, bbox_inches='tight', pad_inches=0.1)
+    plt.close(fig_2d)
+
+    # Render 3D
+    ds = 2
+    mri01 = norm01(mri_3d)
+    mri_ds = mri01[::ds, ::ds, ::ds]
+
+    colors_3d = {1:("NETC","#e41a1c"), 2:("SNFH","#377eb8"), 3:("ET","#4daf4a"), 4:("RC","#984ea3")}
+    op_map = {1:0.95, 2:0.05, 3:0.90, 4:0.15}
+    draw_order = [2, 4, 3, 1]
+
+    fig_3d = go.Figure()
+
+    # Otak Transparan
+    brain = mri_ds > 0.1
+    if brain.sum() > 0:
+        brain_smooth = gaussian_filter(brain.astype(float), sigma=1.2)
+        v, f, _, _ = measure.marching_cubes(brain_smooth, level=0.5)
+        fig_3d.add_trace(go.Mesh3d(
+            x=v[:,0] * ds, y=v[:,1] * ds, z=v[:,2] * ds, i=f[:,0], j=f[:,1], k=f[:,2],
+            color="lightgray", opacity=0.75, name="Brain", hoverinfo="skip"
+        ))
+
+    # Tumor (Tumpukan)
+    for lbl in draw_order:
+        name, col = colors_3d[lbl]
+        bin_vol = (pred_3d == lbl).astype(np.uint8)
+        if bin_vol.sum() > 0:
+            v, f, _, _ = measure.marching_cubes(bin_vol, level=0.5)
+            fig_3d.add_trace(go.Mesh3d(
+                x=v[:,0], y=v[:,1], z=v[:,2], i=f[:,0], j=f[:,1], k=f[:,2],
+                color=col, opacity=op_map[lbl], name=name
+            ))
+    
+    axis_config = dict(
+        showgrid=True,
+        gridcolor='#444444',
+        zerolinecolor='#444444',
+        color='white',
+        showbackground=False,
+        title_font=dict(color='white'),
+    )
+
+    fig_3d.update_layout(
+        paper_bgcolor='black',
+        plot_bgcolor='black',
+        font=dict(color='white'),
+        scene=dict(
+            aspectmode="data",
+            xaxis=dict(**axis_config, title="X"), 
+            yaxis=dict(**axis_config, title="Y"), 
+            zaxis=dict(**axis_config, title="Z"),
+            bgcolor='black'
+        ),
+        margin=dict(l=0, r=0, b=0, t=0)
+    )
+
+    fig_3d.write_html(out_3d, full_html=True, include_plotlyjs='cdn')
+    print(f"Visualisasi 2D dan 3D untuk {case_id} berhasil disimpan!")
+
+# MEDNEXT & VISUALISASI
+def process_mri_ai(scan_id: int, input_dir: str, case_id: str):
+    db = SessionLocal()
+    scan = db.query(models.MRIScan).filter(models.MRIScan.id == scan_id).first()
+
+    if not scan:
+        db.close()
+        return
+
+    print(f"[PROSES MULAI] AI sedang membedah pasien: {case_id}...")
+
+    command = [
+        "nnUNet_predict",
+        "-i", input_dir,
+        "-o", OUTPUT_DIR,
+        "-t", "Task001_BraTS2024",
+        "-m", "3d_fullres",
+        "-f", "4",
+        "-tr", "nnUNetTrainerV2_MedNeXt_M_ChooseOpt",
+        "-p", "nnUNetPlansv2.1_trgSp_1x1x1",
+        "--mode", "normal"
+    ]
+
+    try:
+        print("Menunggu AI memproses gambar 3D")
+        subprocess.run(command, check=True)
+        print(f"AI Selesai Menebak {case_id}!")
+
+        print(f"Membuat visualisasi 3D")
+
+        pred_path = os.path.join(OUTPUT_DIR, f"{case_id}.nii.gz")
+        mri_path_2d = os.path.join(INPUT_DIR, f"{case_id}_0002.nii.gz")
+        mri_path_3d = os.path.join(INPUT_DIR, f"{case_id}_0003.nii.gz")
+
+        try:
+            # Baca Hasil Prediksi
+            pred_data = nib.load(pred_path).get_fdata()
+
+            # Cari angka unik di dalamnya
+            unique_labels = np.unique(pred_data).astype(int).tolist()
+
+            # Hapus angka 0 karena 0 bukan tumor
+            if 0 in unique_labels:
+                unique_labels.remove(0)
+
+            scan.detected_regions = json.dumps(unique_labels)
+            print(f"[INFO WARNA] Region tumor yang terdeteksi: {unique_labels}")
+        except Exception as e_color:
+            print(f"[WARNING] Gagal mendeteksi warna dinamis: {e_color}")
+            scan.detected_regions = json.dumps([1, 2, 3, 4])
+
+        # Nama File untuk Flutter
+        fname_2d = f"result_{scan_id}_2d.png"
+        fname_3d = f"result_{scan_id}_3d.html"
+
+        # Simpan ke folder uploads
+        path_2d = os.path.join(UPLOAD_DIR, fname_2d)
+        path_3d = os.path.join(UPLOAD_DIR, fname_3d)
+
+        generate_visualizations_logic(mri_path_2d, mri_path_3d, pred_path, path_2d, path_3d, case_id)
+
+        scan.hasil_prediksi = "Tumor Terdeteksi" #Nanti dibuat otomatis baca hasil
+        scan.filepath_2d = f"static/{fname_2d}" # Path URL untuk Flutter
+        scan.filepath_3d = f"static/{fname_3d}"
+
+        # Kirim Notifikasi
+        nama_pasien = scan.patient.nama if scan.patient else "Tanpa Nama"
+        target_roles = ["Dokter", "Radiolog"]
+
+        for target in target_roles:
+            new_notif = models.Notification(
+                target_role=target,
+                title="Analisis AI Selesai!",
+                message=f"Hasil pemindaian tumor 3D untuk pasien {nama_pasien} sudah keluar. Silakan cek riwayat.",
+                analysis_id=scan.id
+            )
+            db.add(new_notif)
+        db.commit()
+
+    except Exception as e:
+        print(f"[ERROR AI] Gagal memproses: {e}")
+        scan.hasil_prediksi = "Gagal Diproses AI"
+        db.commit()
+    finally:
+        db.close()
+
 # ENDPOINT UPLOAD MRI
 @app.post("/upload-mri/")
 async def upload_mri_smart(
+    background_tasks: BackgroundTasks,
     nama: str = Form(...),
     id_pasien: str = Form(...),
     tgl_lahir: str = Form(...),
@@ -348,6 +530,11 @@ async def upload_mri_smart(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
+    # ZIP File
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Harus file .zip yang berisi 4 modalitas MRI!")
+
     # LOGIKA DATABASE PASIEN
     pasien_db = db.query(models.Patient).filter(models.Patient.id_pasien_rs == id_pasien).first()
 
@@ -367,66 +554,40 @@ async def upload_mri_smart(
         pasien_db.status_pasien = status
         db.commit()
     
-    # SIMPAN FILE 
-    original_name = file.filename
+    # EKSTRAK ZIP KE FOLDER MEDNEXT
+    zip_path = os.path.join(MEDNEXT_DIR, "pasien_temp.zip")
+    with open(zip_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-    clean_name = original_name.replace(" ", "_").replace("(", "").replace(")", "")
+    for f in os.listdir(INPUT_DIR):
+        os.remove(os.path.join(INPUT_DIR, f))
 
-    filename_server = f"{pasien_db.id}_{int(datetime.now().timestamp())}_{clean_name}"
+    # Ekstrak ZIP
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(INPUT_DIR)
+    os.remove(zip_path)
 
-    print(f"File Asli: {original_name} > Jadi: {filename_server}")
+    # CARI ID OTOMATIS DARI ISI ZIP
+    extracted_files = os.listdir(INPUT_DIR)
+    t1c_file = next((f for f in extracted_files if f.endswith('_0000.nii.gz')), None)
 
-    file_path = os.path.join(UPLOAD_DIR, filename_server)
+    if not t1c_file:
+        raise HTTPException(status_code=400, detail="Format salah! File _0000.nii.gz tidak ditemukan di dalam ZIP.")
 
-    contents = await file.read()
+    case_id = t1c_file.replace('_0000.nii.gz', '')
+    print(f"Pasien MedNeXt terdeteksi: {case_id}")
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(contents)
-
-    # SIMPAN DATA SCAN
-    hasil_prediksi = "Belum Dianalisis"
-    confidence_score = 0
-
-    if model_ai:
-        try:
-            # Load image & resize
-            img = load_img(file_path, target_size=(299, 299))
-
-            # Scaling
-            x = img_to_array(img) / 255.0
-
-            # Expand dims
-            x = np.expand_dims(x, axis=0)
-
-            # Predict
-            prediction = model_ai.predict(x)
-            print(f"Debug AI Raw Prediction: {prediction}")
-
-            predicted_index = int(np.argmax(prediction[0]))
-            score = float(prediction[0][predicted_index])
-            print(f"Debug AI Index: {predicted_index} | Score: {score}")
-
-            if predicted_index == 0:
-                hasil_prediksi = "Cancer"
-            else:
-                hasil_prediksi = "Non-Cancer"
-            confidence_score = int(score * 100)
-            
-        except Exception as e:
-            print(f"Error AI: {e}")
-            hasil_prediksi = "Error Analisis AI"
-
-    else:
-        hasil_prediksi = "Model AI Tidak Siap"
+    status_ai = "Sedang Dianalisis..."
     
     new_scan = models.MRIScan(
         patient_id=pasien_db.id,
-        jenis_mri=jenis_mri,
+        jenis_mri="MRI Otak (MedNeXt)",
         catatan_teknis=catatan,
-        filepath=file_path,
-        filename=filename_server,
-        hasil_prediksi=hasil_prediksi,
-        confidence=confidence_score,
+        filepath_raw=INPUT_DIR,
+        filepath_2d=None,
+        filepath_3d=None,
+        hasil_prediksi=status_ai,
+        confidence=0,
     )
     db.add(new_scan)
     db.commit()
@@ -434,8 +595,8 @@ async def upload_mri_smart(
 
     new_notif = models.Notification(
         target_role="Dokter",
-        title="Analisis AI Selesai",
-        message=f"Analisis MRI untuk pasien {nama} telah selesai dianalisis.",
+        title="Data MRI Otak Diterima",
+        message=f"File ZIP pasien {nama} berhasil diekstrak dan masuk antrean AI.",
         analysis_id=new_scan.id
     )
     db.add(new_notif)
@@ -443,9 +604,11 @@ async def upload_mri_smart(
 
     print(f"Notifikasi disimpan: Untuk dokter, pasien: {nama} | ID scan: {new_scan.id}")
 
-    save_log(db, current_user.username, current_user.role, "Upload MRI", f"Upload scan untuk pasien: {nama} ({hasil_prediksi})")
+    save_log(db, current_user.username, current_user.role, "Upload MRI", f"Upload scan untuk pasien: {nama} (Masuk Antrean AI)")
 
-    return {"status": "sukses", "pesan": "Data tersimpan & Analisis selesai", "hasil_ai": hasil_prediksi, "Confidence": confidence_score}
+    background_tasks.add_task(process_mri_ai, new_scan.id, INPUT_DIR, case_id)
+
+    return {"status": "sukses", "pesan": "ZIP terekstrak & masuk antrean AI", "scan_id": new_scan.id}
 
 # ENDPOINT RIWAYAT
 @app.get("/riwayat-semua/")
@@ -475,13 +638,20 @@ def get_analysis_detail(analysis_id: int, db: Session = Depends(get_db)):
     
     if not scan:
         raise HTTPException(status_code=404, detail="Data MRI tidak ditemukan")
+
+    detected_list = [1, 2, 3, 4]
+    if scan.detected_regions:
+        try:
+            detected_list = json.loads(scan.detected_regions)
+        except Exception:
+            pass
     
     waktu_scan = scan.upload_date.strftime("%d/%m/%Y • %H:%M WIB")
 
-    # 4. Return Data
+    # Return Data
     return {
         "id": scan.id,
-        "image_url": f"/static/{scan.filename}", 
+        "image_url": scan.filepath_2d if scan.filepath_2d else "", 
         "result": scan.hasil_prediksi,
         "confidence": scan.confidence,
         "waktu_scan": waktu_scan,
@@ -490,7 +660,8 @@ def get_analysis_detail(analysis_id: int, db: Session = Depends(get_db)):
         "tgl_lahir": scan.patient.tanggal_lahir if scan.patient else "-",
         "jenis_kelamin": scan.patient.jenis_kelamin if scan.patient else "-",
         "notes_radiolog": scan.catatan_teknis,
-        "notes_dokter": getattr(scan, "catatan_dokter", "Belum ada catatan dokter") 
+        "notes_dokter": getattr(scan, "catatan_dokter", "Belum ada catatan dokter"),
+        "detected_regions": detected_list 
     }
 
 @app.get("/get-image/{filename}")
@@ -545,8 +716,8 @@ async def update_doctor_notes(analysis_id: int, data: dict, db: Session = Depend
 @app.get("/dashboard-summary/", response_model=schemas.DashboardSummary)
 def get_summary(db: Session = Depends(get_db)):
     total_p = db.query(models.Patient).count()
-    menunggu = db.query(models.MRIScan).filter(models.MRIScan.hasil_prediksi == "Belum Dianalisis").count()
-    selesai = db.query(models.MRIScan).filter(models.MRIScan.hasil_prediksi != "Belum Dianalisis").count()
+    menunggu = db.query(models.MRIScan).filter(models.MRIScan.hasil_prediksi == "Sedang Dianalisis...").count()
+    selesai = db.query(models.MRIScan).filter(models.MRIScan.hasil_prediksi != "Sedang Dianalisis...").count()
 
     return {
         "total_pasien": total_p,

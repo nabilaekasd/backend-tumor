@@ -51,13 +51,16 @@ class MRIScan(Base):
     catatan_teknis = Column(Text, nullable=True)
     catatan_dokter = Column(Text, nullable=True)
     
-    filepath = Column(String)
-    filename = Column(String)
+    filepath_raw = Column(String)
+    filepath_2d = Column(String, nullable=True)
+    filepath_3d = Column(String, nullable=True)
     upload_date = Column(DateTime, default=datetime.now)
     
     # Hasil Analisis AI
     hasil_prediksi = Column(String, default="Belum Dianalisis") 
     confidence = Column(Integer, default=0)
+
+    detected_regions = Column(String, nullable=True)
     
     patient = relationship("Patient", back_populates="scans")
 

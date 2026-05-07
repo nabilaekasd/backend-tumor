@@ -72,3 +72,10 @@ class DashboardSummary(BaseModel):
     total_pasien: int
     total_menunggu: int
     total_selesai: int
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+    avatar: Optional[str] = None
