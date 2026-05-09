@@ -21,7 +21,7 @@ Follow these steps to get the system up and running:
 ### 1. Clone the Repository
 Open your terminal or Command Prompt and run:
 ```bash
-git clone [https://github.com/nabilaekasd/backend-tumor.git](https://github.com/nabilaekasd/backend-tumor.git)
+git clone [https://github.com/nabilaekasd/backend-tumor.git]
 cd backend-tumor
 ```
 
