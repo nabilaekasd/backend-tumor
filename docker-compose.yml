@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # 1. Komputer Mini untuk Database (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    container_name: axon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: passwordnabilaesd
+      POSTGRES_DB: tumordb
+    ports:
+      # Membuka port 5433 di luar agar tidak bentrok dengan Postgres bawaan laptop
+      - "5433:5432"
+    volumes:
+      # Menyimpan data tabel agar tidak hilang saat Docker dimatikan
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Komputer Mini untuk FastAPI dan AI
+  fastapi-backend:
+    build: .
+    container_name: axon-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db  # Backend harus menunggu Database menyala dulu
+    volumes:
+      - ./uploads:/app/uploads
+      - ./backend_mednext:/app/backend_mednext
+    restart: unless-stopped
+
+# Mendefinisikan tempat penyimpanan permanen untuk database
+volumes:
+  postgres_data:

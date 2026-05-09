@@ -3,7 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # KONFIGURASI POSTGRESQL
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:passwordnabilaesd@localhost:5433/tumordb"
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:passwordnabilaesd@db:5432/tumordb"
 
 # Membuat mesin database
 engine = create_engine(
