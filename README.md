@@ -1,6 +1,3 @@
-Ini versi yang sudah saya **koreksi dan rapikan**. Silakan *copy-paste* dari blok di bawah ini ya:
-
-```markdown
 # 🧠 Axon: AI-Powered Brain Tumor Detection (Backend)
 
 This repository contains the backend system for the Brain Tumor Detection application. It is built using **FastAPI**, **PostgreSQL**, and integrated with the **MedNeXt** deep learning model for medical image segmentation.
