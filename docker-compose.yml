@@ -29,6 +29,13 @@ services:
       - ./uploads:/app/uploads
       - ./backend_mednext:/app/backend_mednext
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 # Mendefinisikan tempat penyimpanan permanen untuk database
 volumes:

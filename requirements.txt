@@ -7,8 +7,8 @@ passlib[bcrypt]
 bcrypt==3.2.2
 python-jose[cryptography]
 python-dotenv
-torch
-torchvision
+torch==2.5.1
+torchvision==0.20.1
 nnunet
 git+https://github.com/MIC-DKFZ/MedNeXt.git
 nibabel

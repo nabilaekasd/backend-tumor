@@ -22,6 +22,11 @@ RUN pip install --upgrade pip && \
 # Salin sisa kode backend
 COPY . .
 
+# ... (kode Dockerfile kamu sebelumnya) ...
+
+RUN cp nnUNetTrainerV2_MedNeXt_M_ChooseOpt.py /usr/local/lib/python3.10/site-packages/nnunet/training/network_training/ 2>/dev/null || true
+RUN cp nnUNetTrainerV2_MedNeXt_M_ChooseOpt.py /usr/local/lib/python3.10/site-packages/nnunet_mednext/training/network_training/ 2>/dev/null || true
+
 # Ekspos port 8000 agar bisa diakses dari luar
 EXPOSE 8000
 

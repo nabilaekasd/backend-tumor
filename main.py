@@ -250,32 +250,39 @@ def norm01(x):
     if hi <= lo: hi = lo + 1e-8
     return np.clip((x - lo) / (hi - lo + 1e-8), 0, 1)
 
-# 👇 INI ADALAH FUNGSI YANG SEBELUMNYA ERROR KARENA KURANG PARAMETER show_brain
-def generate_single_3d(mri_ds, pred_3d, out_path, target_label, ds=2, show_brain=True):
+def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain=True):
     colors_3d = {1:("NETC","#e41a1c"), 2:("SNFH","#377eb8"), 3:("ET","#4daf4a"), 4:("RC","#984ea3")}
-    # KETEBALAN TUMOR YANG SUDAH DITINGKATKAN
-    op_map = {1:1.0, 2:0.7, 3:1.0, 4:0.7} 
+    op_map = {1:0.95, 2:0.18, 3:0.55, 4:0.35} 
     fig_3d = go.Figure()
 
     if show_brain:
-        brain = mri_ds > 0.1
-        if brain.sum() > 0:
-            brain_smooth = gaussian_filter(brain.astype(float), sigma=1.2)
-            v, f, _, _ = measure.marching_cubes(brain_smooth, level=0.5)
-            fig_3d.add_trace(go.Mesh3d(
-                x=v[:,0] * ds, y=v[:,1] * ds, z=v[:,2] * ds, i=f[:,0], j=f[:,1], k=f[:,2],
-                color="lightgray", opacity=0.3, name="Brain", hoverinfo="skip"
-            ))
+        # KEMBALI KE GAYA COLAB MURNI: Tanpa kompresi ekstra yang bikin melayang
+        nx, ny, nz = mri_ds.shape
+        X, Y, Z = np.mgrid[0:nx, 0:ny, 0:nz]
+
+        fig_3d.add_trace(go.Volume(
+            x=X.flatten(), y=Y.flatten(), z=Z.flatten(),
+            value=mri_ds.flatten(),
+            isomin=0.05,  # Persis seperti script kamu
+            isomax=0.7,   # Persis seperti script kamu
+            opacity=0.05, # Persis seperti script kamu
+            surface_count=8, # Persis seperti script kamu
+            colorscale="Gray",
+            showscale=False,
+            name="Brain",
+            hoverinfo="skip"
+        ))
 
     labels_to_draw = [2, 4, 3, 1] if target_label == 0 else [target_label]
 
     for lbl in labels_to_draw:
         name, col = colors_3d[lbl]
-        bin_vol = (pred_3d == lbl).astype(np.uint8)
+        bin_vol = (pred_ds == lbl).astype(np.uint8) 
         if bin_vol.sum() > 0:
-            v, f, _, _ = measure.marching_cubes(bin_vol, level=0.5)
+            v, f, _, _ = measure.marching_cubes(bin_vol, level=0.5, allow_degenerate=True)
             fig_3d.add_trace(go.Mesh3d(
-                x=v[:,0], y=v[:,1], z=v[:,2], i=f[:,0], j=f[:,1], k=f[:,2],
+                x=v[:,0], y=v[:,1], z=v[:,2], # Koordinat 1:1, tumor dijamin gak melayang!
+                i=f[:,0], j=f[:,1], k=f[:,2],
                 color=col, opacity=1.0 if target_label != 0 else op_map[lbl], name=name
             ))
             
@@ -286,11 +293,11 @@ def generate_single_3d(mri_ds, pred_3d, out_path, target_label, ds=2, show_brain
         margin=dict(l=0, r=0, b=0, t=0)
     )
     fig_3d.write_html(out_path, full_html=True, include_plotlyjs='cdn')
-
+    
 # =========================================================================
 # AI PROCESSOR (BACKGROUND TASK)
 # =========================================================================
-def process_mri_ai(scan_id: int, input_dir: str, case_id: str):
+def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, gt_file_path: str):
     db = SessionLocal()
     scan = db.query(models.MRIScan).filter(models.MRIScan.id == scan_id).first()
     if not scan:
@@ -300,9 +307,15 @@ def process_mri_ai(scan_id: int, input_dir: str, case_id: str):
     print(f"[PROSES MULAI] AI sedang membedah pasien: {case_id}...")
 
     command = [
-        "nnUNet_predict", "-i", input_dir, "-o", OUTPUT_DIR,
-        "-t", "Task001_BraTS2024", "-m", "3d_fullres", "-f", "4",
-        "-tr", "nnUNetTrainerV2_MedNeXt_M_ChooseOpt", "-p", "nnUNetPlansv2.1_trgSp_1x1x1", "--mode", "normal"
+        "nnUNet_predict", 
+        "-i", input_dir, 
+        "-o", OUTPUT_DIR,
+        "-t", "Task001_BraTS2024", 
+        "-m", "3d_fullres", 
+        "-f", "4",
+        "-tr", "nnUNetTrainerV2_MedNeXt_M_ChooseOpt", 
+        "-p", "nnUNetPlansv2.1_trgSp_1x1x1", 
+        "--mode", "normal"
     ]
 
     try:
@@ -384,45 +397,56 @@ async def upload_mri_smart(
         pasien_db.status_pasien = status
         db.commit()
     
-    zip_path = os.path.join(MEDNEXT_DIR, "pasien_temp.zip")
-    with open(zip_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
-
-    for f in os.listdir(INPUT_DIR): os.remove(os.path.join(INPUT_DIR, f))
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref: zip_ref.extractall(INPUT_DIR)
-    os.remove(zip_path)
-
-    extracted_files = os.listdir(INPUT_DIR)
-    t1c_file = next((f for f in extracted_files if f.endswith('_0000.nii.gz')), None)
-    if not t1c_file: raise HTTPException(status_code=400, detail="Format salah! File _0000.nii.gz tidak ditemukan di dalam ZIP.")
-    
-    case_id = t1c_file.replace('_0000.nii.gz', '')
-
-    valid_modalities = [
-        f"{case_id}_0000.nii.gz", f"{case_id}_0001.nii.gz",
-        f"{case_id}_0002.nii.gz", f"{case_id}_0003.nii.gz",
-    ]
-
-    gt_file_path = os.path.join(MEDNEXT_DIR, f"{case_id}_GT.nii.gz")
-    if os.path.exists(gt_file_path): os.remove(gt_file_path)
-
-    for f in extracted_files:
-        if f.endswith('.nii.gz') and f not in valid_modalities:
-            shutil.move(os.path.join(INPUT_DIR, f), gt_file_path)
-            print(f"File Ground Truth ditemukan & diamankan: {f}")
-    
-    new_scan = models.MRIScan(patient_id=pasien_db.id, jenis_mri="MRI Otak (MedNeXt)", catatan_teknis=catatan, filepath_raw=INPUT_DIR, hasil_prediksi="Sedang Dianalisis...")
+    new_scan = models.MRIScan(patient_id=pasien_db.id, jenis_mri="MRI Otak", catatan_teknis=catatan, filepath_raw="", hasil_prediksi="Sedang Dianalisis...")
     db.add(new_scan)
     db.commit()
     db.refresh(new_scan)
 
-    new_notif = models.Notification(target_role="Dokter", title="Data MRI Otak Diterima", message=f"File ZIP pasien {nama} berhasil diekstrak dan masuk antrean AI.", analysis_id=new_scan.id)
+    # Folder Scan
+    scan_folder = os.path.join(UPLOAD_DIR, f"scan_{new_scan.id}")
+    input_dir = os.path.join(scan_folder, "input")
+    output_dir = os.path.join(scan_folder, "output")
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Ekstrak ZIP
+    zip_path = os.path.join(scan_folder, "temp.zip")
+    with open(zip_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(input_dir)
+    os.remove(zip_path)
+
+    extracted_files = os.listdir(input_dir)
+    t1c_file = next((f for f in extracted_files if f.endswith('_0000.nii.gz')), None)
+    if not t1c_file: 
+        raise HTTPException(status_code=400, detail="Format salah! File _0000.nii.gz tidak ditemukan di dalam ZIP.")
+    case_id = t1c_file.replace('_0000.nii.gz', '')
+
+
+    valid_modalities = [
+        f"{case_id}_0000.nii.gz", f"{case_id}_0001.nii.gz", 
+        f"{case_id}_0002.nii.gz", f"{case_id}_0003.nii.gz",
+    ]
+
+    gt_file_path = os.path.join(scan_folder, f"{case_id}_GT.nii.gz")
+
+    for f in extracted_files:
+        if f.endswith('.nii.gz') and f not in valid_modalities:
+            shutil.move(os.path.join(input_dir, f), gt_file_path)
+            print(f"File GT ditemukan dan diamankan: {f}")
+
+    new_scan.filepath_raw = scan_folder
+    db.commit()
+
+    new_notif = models.Notification(target_role="Dokter", title="Data MRI Otak Diterima", message=f"File ZIP Pasien {nama} berhasil diekstrak dan masuk antrean AI.", analysis_id=new_scan.id)
     db.add(new_notif)
     db.commit()
 
     save_log(db, current_user.username, current_user.role, "Upload MRI", f"Upload scan untuk pasien: {nama} (Masuk Antrean AI)")
-    background_tasks.add_task(process_mri_ai, new_scan.id, INPUT_DIR, case_id)
 
-    return {"status": "sukses", "pesan": "ZIP terekstrak & masuk antrean AI", "scan_id": new_scan.id}
+    background_tasks.add_task(process_mri_ai, new_scan.id, input_dir, output_dir, case_id, gt_file_path)
+    return {"status": "sukses", "pesan": "ZIP terekstrak dan masuk antrean AI", "scan_id": new_scan.id}
 
 @app.get("/analisis/{analysis_id}/slice")
 def get_mri_slice(analysis_id: int, axis: int = 2, idx: int = 75, label: str = "all", db: Session = Depends(get_db)):
@@ -433,8 +457,12 @@ def get_mri_slice(analysis_id: int, axis: int = 2, idx: int = 75, label: str = "
         case_id = meta.get("case_id")
     except: raise HTTPException(status_code=400, detail="Data belum siap")
 
-    pred_path = os.path.join(OUTPUT_DIR, f"{case_id}.nii.gz")
-    mri_path_2d = os.path.join(INPUT_DIR, f"{case_id}_0002.nii.gz") 
+    scan_folder = scan.filepath_raw
+    input_dir = os.path.join(scan_folder, "input")
+    output_dir = os.path.join(scan_folder, "output")
+
+    pred_path = os.path.join(output_dir, f"{case_id}.nii.gz")
+    mri_path_2d = os.path.join(input_dir, f"{case_id}_0002.nii.gz") 
 
     try:
         mri_vol = nib.load(mri_path_2d).get_fdata().astype(np.float32)
