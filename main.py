@@ -263,10 +263,10 @@ def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain
         fig_3d.add_trace(go.Volume(
             x=X.flatten(), y=Y.flatten(), z=Z.flatten(),
             value=mri_ds.flatten(),
-            isomin=0.05,  # Persis seperti script kamu
-            isomax=0.7,   # Persis seperti script kamu
-            opacity=0.05, # Persis seperti script kamu
-            surface_count=8, # Persis seperti script kamu
+            isomin=0.05, 
+            isomax=0.7, 
+            opacity=0.05, 
+            surface_count=8,
             colorscale="Gray",
             showscale=False,
             name="Brain",
@@ -281,7 +281,7 @@ def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain
         if bin_vol.sum() > 0:
             v, f, _, _ = measure.marching_cubes(bin_vol, level=0.5, allow_degenerate=True)
             fig_3d.add_trace(go.Mesh3d(
-                x=v[:,0], y=v[:,1], z=v[:,2], # Koordinat 1:1, tumor dijamin gak melayang!
+                x=v[:,0], y=v[:,1], z=v[:,2],
                 i=f[:,0], j=f[:,1], k=f[:,2],
                 color=col, opacity=1.0 if target_label != 0 else op_map[lbl], name=name
             ))
@@ -293,7 +293,7 @@ def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain
         margin=dict(l=0, r=0, b=0, t=0)
     )
     fig_3d.write_html(out_path, full_html=True, include_plotlyjs='cdn')
-    
+
 # =========================================================================
 # AI PROCESSOR (BACKGROUND TASK)
 # =========================================================================
