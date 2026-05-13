@@ -94,9 +94,7 @@ def save_log(db: Session, username: str, role: str, activity: str, details: str 
     except Exception as e:
         print(f"Gagal menyimpan log: {e}")
 
-# =========================================================================
 # ENDPOINT AUTH & USER
-# =========================================================================
 @app.post("/token/")
 async def login_for_access_token(from_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == from_data.username).first()
@@ -174,9 +172,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     save_log(db, current_user.username, current_user.role, "Update Profile", "Mengganti foto profil")
     return {"message": "Foto profil berhasil diupdate", "url": avatar_url} 
 
-# =========================================================================
 # ENDPOINT DATA PASIEN
-# =========================================================================
 @app.get("/patients/", response_model=List[schemas.PatientResponse])
 def read_patient(db: Session = Depends(get_db)):
     return db.query(models.Patient).order_by(models.Patient.id.asc()).all()
@@ -209,9 +205,7 @@ def update_patient(patient_id: int, patient_update: schemas.PatientCreate, curre
     save_log(db, current_user.username, current_user.role, "Edit Patient", detail_msg)
     return db_patient
 
-# =========================================================================
 # HELPER LOGIC AI: METRIK & 3D RENDERER
-# =========================================================================
 def recall_specificity(pred, gt, cls, eps=1e-8):
     pred_c = (pred == cls)
     gt_c = (gt == cls)
@@ -256,32 +250,26 @@ def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain
     fig_3d = go.Figure()
 
     if show_brain:
-        # KEMBALI KE GAYA COLAB MURNI: Tanpa kompresi ekstra yang bikin melayang
-        nx, ny, nz = mri_ds.shape
-        X, Y, Z = np.mgrid[0:nx, 0:ny, 0:nz]
-
-        fig_3d.add_trace(go.Volume(
-            x=X.flatten(), y=Y.flatten(), z=Z.flatten(),
-            value=mri_ds.flatten(),
-            isomin=0.05, 
-            isomax=0.7, 
-            opacity=0.05, 
-            surface_count=8,
-            colorscale="Gray",
-            showscale=False,
-            name="Brain",
-            hoverinfo="skip"
-        ))
+        brain = mri_ds > 0.1
+        if brain.sum() > 0:
+            brain_smooth = gaussian_filter(brain.astype(float), sigma=1.2)
+            v, f, _, _ = measure.marching_cubes(brain_smooth, level=0.5)
+            fig_3d.add_trace(go.Mesh3d(
+                x=v[:,0] * ds, y=v[:,1] * ds, z=v[:,2] * ds, # Otak dikali ds
+                i=f[:,0], j=f[:,1], k=f[:,2],
+                color="lightgray", opacity=0.4, lighting=dict(ambient=0.6, diffuse=0.8),
+                name="Brain", hoverinfo="skip"
+            ))
 
     labels_to_draw = [2, 4, 3, 1] if target_label == 0 else [target_label]
 
     for lbl in labels_to_draw:
         name, col = colors_3d[lbl]
-        bin_vol = (pred_ds == lbl).astype(np.uint8) 
+        bin_vol = (pred_ds == lbl).astype(np.uint8)
         if bin_vol.sum() > 0:
             v, f, _, _ = measure.marching_cubes(bin_vol, level=0.5, allow_degenerate=True)
             fig_3d.add_trace(go.Mesh3d(
-                x=v[:,0], y=v[:,1], z=v[:,2],
+                x=v[:,0] * ds, y=v[:,1] * ds, z=v[:,2] * ds,
                 i=f[:,0], j=f[:,1], k=f[:,2],
                 color=col, opacity=1.0 if target_label != 0 else op_map[lbl], name=name
             ))
@@ -294,9 +282,7 @@ def generate_single_3d(mri_ds, pred_ds, out_path, target_label, ds=2, show_brain
     )
     fig_3d.write_html(out_path, full_html=True, include_plotlyjs='cdn')
 
-# =========================================================================
 # AI PROCESSOR (BACKGROUND TASK)
-# =========================================================================
 def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, gt_file_path: str):
     db = SessionLocal()
     scan = db.query(models.MRIScan).filter(models.MRIScan.id == scan_id).first()
@@ -309,7 +295,7 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
     command = [
         "nnUNet_predict", 
         "-i", input_dir, 
-        "-o", OUTPUT_DIR,
+        "-o", output_dir,
         "-t", "Task001_BraTS2024", 
         "-m", "3d_fullres", 
         "-f", "4",
@@ -320,8 +306,8 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
 
     try:
         subprocess.run(command, check=True)
-        pred_path = os.path.join(OUTPUT_DIR, f"{case_id}.nii.gz")
-        mri_path_3d = os.path.join(INPUT_DIR, f"{case_id}_0003.nii.gz")
+        pred_path = os.path.join(output_dir, f"{case_id}.nii.gz")
+        mri_path_3d = os.path.join(input_dir, f"{case_id}_0003.nii.gz")
 
         pred_data = nib.load(pred_path).get_fdata()
         unique_labels = np.unique(pred_data).astype(int).tolist()
@@ -343,6 +329,7 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
         mri01 = norm01(mri_3d)
         mri_ds = mri01[::ds, ::ds, ::ds]
 
+        pred_ds = pred_3d[::ds, ::ds, ::ds]
         path_3d_db = {}
         base_labels = {"all": 0, "netc": 1, "snfh": 2, "et": 3, "rc": 4}
 
@@ -350,13 +337,13 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
             # 1. Render Versi Dengan Otak
             fname_3d_with = f"result_{scan_id}_3d_{key}.html"
             out_path_with = os.path.join(UPLOAD_DIR, fname_3d_with)
-            generate_single_3d(mri_ds, pred_3d, out_path_with, lbl, ds, show_brain=True)
+            generate_single_3d(mri_ds, pred_ds, out_path_with, lbl, show_brain=True)
             path_3d_db[key] = f"static/{fname_3d_with}"
 
             # 2. Render Versi TANPA Otak
             fname_3d_no = f"result_{scan_id}_3d_{key}_nobrain.html"
             out_path_no = os.path.join(UPLOAD_DIR, fname_3d_no)
-            generate_single_3d(mri_ds, pred_3d, out_path_no, lbl, ds, show_brain=False)
+            generate_single_3d(mri_ds, pred_ds, out_path_no, lbl, show_brain=False)
             path_3d_db[f"{key}_nobrain"] = f"static/{fname_3d_no}"
 
         scan.filepath_3d = json.dumps(path_3d_db)
@@ -375,9 +362,7 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
     finally:
         db.close()
 
-# =========================================================================
 # ENDPOINT ANALISIS & FILE
-# =========================================================================
 @app.post("/upload-mri/")
 async def upload_mri_smart(
     background_tasks: BackgroundTasks, nama: str = Form(...), id_pasien: str = Form(...), tgl_lahir: str = Form(...),
@@ -574,9 +559,7 @@ async def update_doctor_notes(analysis_id: int, data: dict, db: Session = Depend
     save_log(db, current_user.username, current_user.role, "Update Notes", f"Update catatan dokter untuk Scan ID: {analysis_id}")
     return {"status": "sukses", "message": "Catatan berhasil diperbarui", "data": new_notes}
 
-# =========================================================================
-# ENDPOINT LAINNYA
-# =========================================================================
+# ENDPOINT SUMMARY
 @app.get("/dashboard-summary/", response_model=schemas.DashboardSummary)
 def get_summary(db: Session = Depends(get_db)):
     total_p = db.query(models.Patient).count()

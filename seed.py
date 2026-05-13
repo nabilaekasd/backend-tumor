@@ -35,11 +35,11 @@ def seed_database():
         db.commit()
 
         patients = [
-            {"id_pasien_rs": "RM-2024-001", "nama": "Bapak Anton", "tanggal_lahir": "1980-05-12", "status_pasien": "Aktif", "jenis_kelamin": "Laki-laki"},
-            {"id_pasien_rs": "RM-2024-002", "nama": "Ibu Siti", "tanggal_lahir": "1975-08-22", "status_pasien": "Aktif", "jenis_kelamin": "Perempuan"},
-            {"id_pasien_rs": "RM-2024-003", "nama": "Bapak Rudi", "tanggal_lahir": "1990-11-03", "status_pasien": "Aktif", "jenis_kelamin": "Laki-laki"},
-            {"id_pasien_rs": "RM-2024-004", "nama": "Ibu Ningsih", "tanggal_lahir": "1985-02-15", "status_pasien": "Aktif", "jenis_kelamin": "Perempuan"},
-            {"id_pasien_rs": "RM-2024-005", "nama": "Saudara Kevin", "tanggal_lahir": "2000-07-30", "status_pasien": "Tidak Aktif", "jenis_kelamin": "Laki-laki"}
+            {"id_pasien_rs": "RM-2024-001", "nama": "Anton", "tanggal_lahir": "1980-05-12", "status_pasien": "Aktif", "jenis_kelamin": "Laki-laki"},
+            {"id_pasien_rs": "RM-2024-002", "nama": "Siti", "tanggal_lahir": "1975-08-22", "status_pasien": "Aktif", "jenis_kelamin": "Perempuan"},
+            {"id_pasien_rs": "RM-2024-003", "nama": "Rudi", "tanggal_lahir": "1990-11-03", "status_pasien": "Aktif", "jenis_kelamin": "Laki-laki"},
+            {"id_pasien_rs": "RM-2024-004", "nama": "Ningsih", "tanggal_lahir": "1985-02-15", "status_pasien": "Aktif", "jenis_kelamin": "Perempuan"},
+            {"id_pasien_rs": "RM-2024-005", "nama": "Kevin", "tanggal_lahir": "2000-07-30", "status_pasien": "Tidak Aktif", "jenis_kelamin": "Laki-laki"}
         ]
 
         for pasien in patients:

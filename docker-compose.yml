@@ -14,7 +14,6 @@ services:
       # Membuka port 5433 di luar agar tidak bentrok dengan Postgres bawaan laptop
       - "5433:5432"
     volumes:
-      # Menyimpan data tabel agar tidak hilang saat Docker dimatikan
       - postgres_data:/var/lib/postgresql/data
 
   # 2. Komputer Mini untuk FastAPI dan AI
@@ -28,6 +27,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./backend_mednext:/app/backend_mednext
+      - .:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
     deploy:
       resources:
