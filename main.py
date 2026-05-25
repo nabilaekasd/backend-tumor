@@ -30,6 +30,8 @@ import plotly.graph_objects as go
 from skimage import measure
 from scipy.ndimage import gaussian_filter
 import torch
+from datetime import datetime, timezone
+import pytz
 
 torch.serialization.add_safe_globals([np._core.multiarray.scalar])
 
@@ -131,9 +133,12 @@ def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session = Dep
     if user_update.password and user_update.password.strip():
         db_user.hashed_password = auth.get_password_hash(user_update.password)
     if user_update.avatar is not None: db_user.avatar = user_update.avatar
+    if user_update.is_active is not None:
+        db_user.is_active = user_update.is_active
     db.commit()
     db.refresh(db_user)
-    save_log(db, current_user.username, current_user.role, "Edit User", f"Mengedit user ID: {user_id}")
+    status_text = "Aktif" if db_user.is_active else "Nonaktif"
+    save_log(db, current_user.username, current_user.role, "Edit User", f"Mengedit user ID: {user_id} - Status: {status_text}")
     return db_user
 
 @app.delete("/users/{user_id}")
@@ -142,10 +147,10 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_user: model
     if not db_user: raise HTTPException(status_code=404, detail="User tidak ditemukan")
     if db_user.id == current_user.id: raise HTTPException(status_code=400, detail="Tidak dapat menghapus akun sendiri")
     target_username = db_user.username
-    db.delete(db_user)
+    db_user.is_active = False
     db.commit()
-    save_log(db, current_user.username, current_user.role, "Delete User", f"Menghapus user: {target_username}")
-    return {"detail": "User berhasil dihapus"}
+    save_log(db, current_user.username, current_user.role, "Deactivate User", f"Menonaktifkan user: {target_username}")
+    return {"detail": "User berhasil dinonaktifkan"}
 
 @app.get("/users/me/", response_model=schemas.UserResponse)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
@@ -485,9 +490,22 @@ def get_mri_slice(analysis_id: int, axis: int = 2, idx: int = 75, label: str = "
 @app.get("/riwayat-semua/")
 def get_all_history(db: Session = Depends(get_db)):
     scans = db.query(models.MRIScan).order_by(models.MRIScan.upload_date.desc()).all()
+    
+    tz_jkt = pytz.timezone('Asia/Jakarta')
     results = []
+    
     for scan in scans:
-        tgl_cantik = scan.upload_date.strftime("%d/%m/%Y")
+        if not scan.upload_date:
+            tgl_cantik = "-"
+        else:
+            if scan.upload_date.tzinfo is None:
+                waktu_utc = scan.upload_date.replace(tzinfo=pytz.utc)
+                waktu_lokal = waktu_utc.astimezone(tz_jkt)
+            else:
+                waktu_lokal = scan.upload_date.astimezone(tz_jkt)
+            
+            tgl_cantik = waktu_lokal.strftime("%d/%m/%Y")
+
         results.append({
             "id": scan.id, "jenis_mri": scan.jenis_mri, "tanggal_periksa": tgl_cantik,
             "hasil_prediksi": scan.hasil_prediksi, "nama_pasien": scan.patient.nama if scan.patient else "Tanpa Nama",
@@ -517,13 +535,25 @@ def get_analysis_detail(analysis_id: int, db: Session = Depends(get_db)):
     else:
         paths_3d = {"all": scan.filepath_3d}
 
+    # Konversi Zona Waktu
+    tz_jkt = pytz.timezone('Asia/Jakarta')
+    if scan.upload_date:
+        if scan.upload_date.tzinfo is None:
+            waktu_utc = scan.upload_date.replace(tzinfo=pytz.utc)
+            waktu_lokal = waktu_utc.astimezone(tz_jkt)
+        else:
+            waktu_lokal = scan.upload_date.astimezone(tz_jkt)
+        waktu_scan_cantik = waktu_lokal.strftime("%d/%m/%Y • %H:%M WIB")
+    else:
+        waktu_scan_cantik = "-"
+
     return {
         "id": scan.id,
         "image_url": "dynamic", 
         "paths_3d": paths_3d,
         "result": scan.hasil_prediksi,
         "confidence": scan.confidence,
-        "waktu_scan": scan.upload_date.strftime("%d/%m/%Y • %H:%M WIB"),
+        "waktu_scan": waktu_scan_cantik, # 👇 Gunakan waktu yang sudah dikonversi
         "nama_pasien": scan.patient.nama if scan.patient else "-",
         "id_rm": scan.patient.id_pasien_rs if scan.patient else "-",
         "tgl_lahir": scan.patient.tanggal_lahir if scan.patient else "-",
@@ -578,12 +608,63 @@ def get_logs(role: str = None, start_date: str = None, end_date: str = None, db:
             query = query.filter(models.ActivityLog.timestamp >= start)
             query = query.filter(models.ActivityLog.timestamp <= end)
         except ValueError: pass
-    return query.order_by(models.ActivityLog.timestamp.desc()).all()
+        
+    logs = query.order_by(models.ActivityLog.timestamp.desc()).all()
+    
+    # KITA KONVERSI KE JAKARTA DI SINI SEBELUM DIKIRIM KE FLUTTER
+    tz_jkt = pytz.timezone('Asia/Jakarta')
+    results = []
+    
+    for log in logs:
+        if log.timestamp:
+            # Ubah waktu buta dari database jadi waktu UTC, lalu geser ke WIB
+            if log.timestamp.tzinfo is None:
+                waktu_utc = log.timestamp.replace(tzinfo=pytz.utc)
+                waktu_lokal = waktu_utc.astimezone(tz_jkt)
+            else:
+                waktu_lokal = log.timestamp.astimezone(tz_jkt)
+        else:
+            waktu_lokal = None
+
+        results.append({
+            "id": log.id,
+            "username": log.username,
+            "role": log.role,
+            "activity": log.activity,
+            "details": log.details,
+            "timestamp": waktu_lokal  # 👈 Sudah pakai waktu Jakarta!
+        })
+        
+    return results
 
 @app.get("/notifications/")
 def get_notifications(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     notifs = db.query(models.Notification).filter(func.lower(models.Notification.target_role) == func.lower(current_user.role)).order_by(models.Notification.created_at.desc()).all()
-    results = [{"id": n.id, "title": n.title, "message": n.message, "analysis_id": n.analysis_id, "is_read": n.is_read, "created_at": n.created_at.strftime("%d/%m/%Y • %H:%M WIB")} for n in notifs]
+    
+    tz_jkt = pytz.timezone('Asia/Jakarta')
+    results = []
+    
+    for n in notifs:
+        if not n.created_at:
+            tgl_cantik = "-"
+        else:
+            if n.created_at.tzinfo is None:
+                waktu_utc = n.created_at.replace(tzinfo=pytz.utc)
+                waktu_lokal = waktu_utc.astimezone(tz_jkt)
+            else:
+                waktu_lokal = n.created_at.astimezone(tz_jkt)
+            
+            tgl_cantik = waktu_lokal.strftime("%d/%m/%Y • %H:%M WIB")
+
+        results.append({
+            "id": n.id, 
+            "title": n.title, 
+            "message": n.message, 
+            "analysis_id": n.analysis_id, 
+            "is_read": n.is_read, 
+            "created_at": tgl_cantik
+        })
+        
     return results
 
 @app.put("/notifications/{notif_id}/read")

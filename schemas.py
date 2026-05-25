@@ -79,3 +79,4 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = None
     avatar: Optional[str] = None
+    is_active: Optional[bool] = None
