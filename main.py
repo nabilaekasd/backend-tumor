@@ -553,7 +553,7 @@ def get_analysis_detail(analysis_id: int, db: Session = Depends(get_db)):
         "paths_3d": paths_3d,
         "result": scan.hasil_prediksi,
         "confidence": scan.confidence,
-        "waktu_scan": waktu_scan_cantik, # 👇 Gunakan waktu yang sudah dikonversi
+        "waktu_scan": waktu_scan_cantik,
         "nama_pasien": scan.patient.nama if scan.patient else "-",
         "id_rm": scan.patient.id_pasien_rs if scan.patient else "-",
         "tgl_lahir": scan.patient.tanggal_lahir if scan.patient else "-",
@@ -610,14 +610,11 @@ def get_logs(role: str = None, start_date: str = None, end_date: str = None, db:
         except ValueError: pass
         
     logs = query.order_by(models.ActivityLog.timestamp.desc()).all()
-    
-    # KITA KONVERSI KE JAKARTA DI SINI SEBELUM DIKIRIM KE FLUTTER
     tz_jkt = pytz.timezone('Asia/Jakarta')
     results = []
     
     for log in logs:
         if log.timestamp:
-            # Ubah waktu buta dari database jadi waktu UTC, lalu geser ke WIB
             if log.timestamp.tzinfo is None:
                 waktu_utc = log.timestamp.replace(tzinfo=pytz.utc)
                 waktu_lokal = waktu_utc.astimezone(tz_jkt)
@@ -632,7 +629,7 @@ def get_logs(role: str = None, start_date: str = None, end_date: str = None, db:
             "role": log.role,
             "activity": log.activity,
             "details": log.details,
-            "timestamp": waktu_lokal  # 👈 Sudah pakai waktu Jakarta!
+            "timestamp": waktu_lokal
         })
         
     return results
