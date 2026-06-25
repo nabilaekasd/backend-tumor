@@ -4,7 +4,7 @@ import torch
 import numpy as np
 
 # Tambahkan path MedNeXt
-sys.path.append('/home/nabila/backend-tumor/MedNeXt')
+# sys.path.append('/home/nabila/backend-tumor/MedNeXt')
 
 # Import kelas bawaan nnU-Net
 from nnunet.training.network_training.nnUNetTrainer import nnUNetTrainer
