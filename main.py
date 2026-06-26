@@ -226,13 +226,12 @@ def load_u8(path):
     nii = nib.as_closest_canonical(nib.load(path))
     return np.rint(nii.get_fdata()).astype(np.uint8)
 
-def calculate_metrics_if_gt_exists(pred_path, case_id):
-    gt_path = os.path.join(MEDNEXT_DIR, f"{case_id}_GT.nii.gz")
-    if not os.path.exists(gt_path):
+def calculate_metrics_if_gt_exists(pred_path, gt_file_path):
+    if not os.path.exists(gt_file_path):
         return None
     try:
         pred = load_u8(pred_path)
-        gt = load_u8(gt_path)
+        gt = load_u8(gt_file_path)
         classes = {1: "NETC", 2: "SNFH", 3: "ET", 4: "RC"}
         metrics = {}
         for cls, name in classes.items():
@@ -319,7 +318,7 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
         if 0 in unique_labels: unique_labels.remove(0)
         scan.detected_regions = json.dumps(unique_labels)
 
-        metrics_json = calculate_metrics_if_gt_exists(pred_path, case_id)
+        metrics_json = calculate_metrics_if_gt_exists(pred_path, gt_file_path)
 
         scan.catatan_teknis = json.dumps({
             "metrics": json.loads(metrics_json) if metrics_json else None,
