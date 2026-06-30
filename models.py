@@ -18,17 +18,13 @@ class Patient(Base):
     __tablename__ = "patients"
     
     id = Column(Integer, primary_key=True, index=True)
-    # id_pasien_rs adalah ID yang diketik radiolog (misal: RM-2024-001)
     id_pasien_rs = Column(String, unique=True, index=True) 
     nama = Column(String, index=True)
     tanggal_lahir = Column(String)
-    status_pasien = Column(String) # 'Aktif' / 'Tidak Aktif'
+    status_pasien = Column(String)
     jenis_kelamin = Column(String, default="Laki-laki")
-    
-    # Mencatat kapan terakhir data ini diupdate/dibuat
     created_at = Column(DateTime, default=datetime.now)
     
-    # Relasi ke Scan
     scans = relationship("MRIScan", back_populates="patient", cascade="all, delete-orphan")
 
 class ActivityLog(Base):
@@ -55,11 +51,8 @@ class MRIScan(Base):
     filepath_2d = Column(String, nullable=True)
     filepath_3d = Column(String, nullable=True)
     upload_date = Column(DateTime, default=datetime.now)
-    
-    # Hasil Analisis AI
     hasil_prediksi = Column(String, default="Belum Dianalisis") 
     confidence = Column(Integer, default=0)
-
     detected_regions = Column(String, nullable=True)
     
     patient = relationship("Patient", back_populates="scans")
@@ -71,7 +64,6 @@ class Notification(Base):
     target_role = Column(String) 
     title = Column(String)
     message = Column(String)
-
     analysis_id = Column(Integer, ForeignKey("mri_scans.id"), nullable=True)
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.now)
