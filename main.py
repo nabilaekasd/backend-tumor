@@ -86,6 +86,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None: raise credentials_exception
+
+    if not user.is_active: raise HTTPException(status_code=403, detail=" Sesi ditolak: Akun Anda telah dinonaktifkan oleh IT System Administrator.")
     return user
 
 def save_log(db: Session, username: str, role: str, activity: str, details: str = ""):
@@ -102,6 +104,9 @@ async def login_for_access_token(from_data: OAuth2PasswordRequestForm = Depends(
     user = db.query(models.User).filter(models.User.username == from_data.username).first()
     if not user or not auth.verify_password(from_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Username atau Password Salah")
+
+    if not user.is_active: raise HTTPException(status_code=403, detail="Akun Anda telah dinonaktifkan. Silakan hubungi IT System Administrator.")
+
     access_token = auth.create_access_token(data={"sub": user.username, "role": user.role, "id": user.id})
     save_log(db, user.username, user.role, "Login", "Login Berhasil")
     return {"access_token": access_token, "token_type": "bearer", "role": user.role}
@@ -344,7 +349,7 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
             generate_single_3d(mri_ds, pred_ds, out_path_with, lbl, show_brain=True)
             path_3d_db[key] = f"static/{fname_3d_with}"
 
-            # 2. Render Versi TANPA Otak
+            # 2. Render Versi Tanpa Otak
             fname_3d_no = f"result_{scan_id}_3d_{key}_nobrain.html"
             out_path_no = os.path.join(UPLOAD_DIR, fname_3d_no)
             generate_single_3d(mri_ds, pred_ds, out_path_no, lbl, show_brain=False)
@@ -356,7 +361,11 @@ def process_mri_ai(scan_id: int, input_dir: str, output_dir: str, case_id: str, 
 
         target_roles = ["Dokter", "Radiolog"]
         for target in target_roles:
-            db.add(models.Notification(target_role=target, title="Analisis AI Selesai!", message="Hasil pemindaian 3D dan Slice 2D dapat dilihat.", analysis_id=scan.id))
+            db.add(models.Notification(
+                target_role=target, 
+                title="Analisis AI Selesai!", 
+                message="Hasil pemindaian 3D dan Slice 2D dapat dilihat.", 
+                analysis_id=scan.id))
         db.commit()
     
     except Exception as e:
@@ -582,7 +591,11 @@ async def update_doctor_notes(analysis_id: int, data: dict, db: Session = Depend
     db.refresh(scan)
 
     nama_pasien = scan.patient.nama if scan.patient else "Tanpa Nama"
-    db.add(models.Notification(target_role="Radiolog", title="Catatan Dokter", message=f"Dokter telah menambahkan catatan untuk pasien {nama_pasien}.", analysis_id=scan.id))
+    db.add(models.Notification(
+        target_role="Radiolog", 
+        title="Catatan Dokter", 
+        message=f"Dokter telah menambahkan catatan untuk pasien {nama_pasien}.", 
+        analysis_id=scan.id))
     db.commit()
 
     save_log(db, current_user.username, current_user.role, "Update Notes", f"Update catatan dokter untuk Scan ID: {analysis_id}")
