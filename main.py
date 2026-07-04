@@ -132,10 +132,16 @@ def create_new_user(user: schemas.UserCreate, db: Session = Depends(get_db), cur
 def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if not db_user: raise HTTPException(status_code=404, detail="User tidak ditemukan")
+    
     if user_update.username is not None: db_user.username = user_update.username
     if user_update.full_name is not None: db_user.full_name = user_update.full_name
     if user_update.role is not None: db_user.role = user_update.role
     if user_update.password and user_update.password.strip():
+        if current_user.id == user_id:
+            if not user_update.old_password:
+                raise HTTPException(status_code=400, detail="Password lama wajib diisi.")
+            if not auth.verify_password(user_update.old_password, db_user.hashed_password):
+                raise HTTPException(status_code=400, detail="Password lama salah.")
         db_user.hashed_password = auth.get_password_hash(user_update.password)
     if user_update.avatar is not None: db_user.avatar = user_update.avatar
     if user_update.is_active is not None:
@@ -437,7 +443,11 @@ async def upload_mri_smart(
     new_scan.filepath_raw = scan_folder
     db.commit()
 
-    new_notif = models.Notification(target_role="Dokter", title="Data MRI Otak Diterima", message=f"File ZIP Pasien {nama} berhasil diekstrak dan masuk antrean AI.", analysis_id=new_scan.id)
+    new_notif = models.Notification(
+        target_role="Dokter", 
+        title="Data MRI Otak Diterima", 
+        message=f"File ZIP Pasien {nama} berhasil diekstrak dan masuk antrean AI.", 
+        analysis_id=new_scan.id)
     db.add(new_notif)
     db.commit()
 

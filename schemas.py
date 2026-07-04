@@ -80,3 +80,4 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     avatar: Optional[str] = None
     is_active: Optional[bool] = None
+    old_password: Optional[str] = None
